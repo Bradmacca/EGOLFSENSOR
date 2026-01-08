@@ -10,10 +10,12 @@ import { SimulatedSensor } from '../sensors/SimulatedSensor';
 import { BLESensorAdapter } from '../ble/BLESensorAdapter';
 import { BLEManager } from '../ble/BLEManager';
 import { SwingDetector } from '../sensors/SwingDetector';
-import { SessionWriter } from '../storage/SessionStorage';
+import { SessionWriter, loadImpactNeutralBaseline, loadAppSettings } from '../storage';
 import { SensorSample, SwingEvent, SessionMetadata, RecordingConfig, DEFAULT_RECORDING_CONFIG } from '../types';
+import { ImpactNeutralBaseline, AppSettings, DEFAULT_APP_SETTINGS, getWristErrorRating } from '../types/calibration';
 import { BLEState } from '../types/ble';
 import { vectorMagnitude } from '../utils/math';
+import { provideSuccessFeedback, initializeAudio } from '../utils/feedback';
 
 /**
  * Sensor context state
@@ -46,6 +48,15 @@ interface SensorContextState {
   
   // Swing detection
   detectedEvents: SwingEvent[];
+  
+  // Calibration
+  impactNeutralBaseline: ImpactNeutralBaseline | null;
+  appSettings: AppSettings;
+  refreshCalibration: () => Promise<void>;
+  refreshSettings: () => Promise<void>;
+  
+  // Current wrist error (live)
+  currentWristError: number | null;
   
   // Simulator controls
   triggerSimulatedSwing: () => void;
@@ -97,9 +108,76 @@ export function SensorProvider({ children }: SensorProviderProps): React.JSX.Ele
   
   const [detectedEvents, setDetectedEvents] = useState<SwingEvent[]>([]);
   
+  // Calibration state
+  const [impactNeutralBaseline, setImpactNeutralBaseline] = useState<ImpactNeutralBaseline | null>(null);
+  const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
+  const [currentWristError, setCurrentWristError] = useState<number | null>(null);
+  
   // Recording timer ref
   const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
   const recordingStartTimeRef = useRef<number>(0);
+  
+  // Load calibration and settings on mount
+  useEffect(() => {
+    async function loadCalibrationData() {
+      const [baseline, settings] = await Promise.all([
+        loadImpactNeutralBaseline(),
+        loadAppSettings(),
+      ]);
+      setImpactNeutralBaseline(baseline);
+      setAppSettings(settings);
+      
+      // Update swing detector with baseline
+      if (baseline) {
+        swingDetectorRef.current.setImpactNeutralBaseline(baseline);
+      }
+      
+      // Initialize audio
+      await initializeAudio();
+    }
+    loadCalibrationData();
+  }, []);
+  
+  // Update swing detector when baseline changes
+  useEffect(() => {
+    swingDetectorRef.current.setImpactNeutralBaseline(impactNeutralBaseline);
+  }, [impactNeutralBaseline]);
+  
+  // Refresh calibration (call after calibration screen saves new baseline)
+  const refreshCalibration = useCallback(async () => {
+    const baseline = await loadImpactNeutralBaseline();
+    setImpactNeutralBaseline(baseline);
+    swingDetectorRef.current.setImpactNeutralBaseline(baseline);
+  }, []);
+  
+  // Refresh settings
+  const refreshSettings = useCallback(async () => {
+    const settings = await loadAppSettings();
+    setAppSettings(settings);
+  }, []);
+  
+  // Handle impact feedback
+  const handleImpactFeedback = useCallback(async (wristError: number) => {
+    if (!appSettings.feedbackEnabled && !appSettings.hapticEnabled) {
+      return;
+    }
+    
+    const rating = getWristErrorRating(wristError, appSettings.wristErrorThresholds);
+    
+    // Only provide feedback for "Great" rating
+    if (rating === 'Great') {
+      await provideSuccessFeedback({
+        audioEnabled: appSettings.feedbackEnabled,
+        hapticEnabled: appSettings.hapticEnabled,
+        volume: appSettings.feedbackVolume,
+      });
+    }
+  }, [appSettings]);
+  
+  // Set up impact feedback callback
+  useEffect(() => {
+    swingDetectorRef.current.onImpactFeedback(handleImpactFeedback);
+  }, [handleImpactFeedback]);
   
   // Get current adapter
   const getCurrentAdapter = useCallback((): ISensorAdapter => {
@@ -141,6 +219,18 @@ export function SensorProvider({ children }: SensorProviderProps): React.JSX.Ele
     setCurrentSample(sample);
     setGyroMagnitude(vectorMagnitude(sample.gyro));
     
+    // Compute current wrist error if baseline is available
+    if (impactNeutralBaseline && (sample.quat || sample.euler)) {
+      const { calculateWristError } = require('../utils/math');
+      const error = calculateWristError(
+        { quat: sample.quat, euler: sample.euler },
+        { quat: impactNeutralBaseline.quat, euler: impactNeutralBaseline.euler }
+      );
+      setCurrentWristError(error);
+    } else {
+      setCurrentWristError(null);
+    }
+    
     // Process through swing detector if configured
     if (recordingConfig.detectEvents) {
       swingDetectorRef.current.processSample(sample);
@@ -151,7 +241,7 @@ export function SensorProvider({ children }: SensorProviderProps): React.JSX.Ele
       sessionWriterRef.current.addSample(sample);
       setRecordingSampleCount(prev => prev + 1);
     }
-  }, [recordingConfig.detectEvents]);
+  }, [recordingConfig.detectEvents, impactNeutralBaseline]);
   
   // Set simulator usage
   const setUseSimulator = useCallback(async (use: boolean) => {
@@ -314,6 +404,12 @@ export function SensorProvider({ children }: SensorProviderProps): React.JSX.Ele
     stopRecording,
     
     detectedEvents,
+    
+    impactNeutralBaseline,
+    appSettings,
+    refreshCalibration,
+    refreshSettings,
+    currentWristError,
     
     triggerSimulatedSwing,
     setSimulatorSwingMode,

@@ -17,6 +17,7 @@ import { useSensor } from '../context';
 import { WristAngleGauge } from '../components/WristAngleGauge';
 import { MetricRow, MetricGrid } from '../components/MetricRow';
 import { StatusChip } from '../components/StatusChip';
+import { getWristErrorRating } from '../types/calibration';
 
 export function LiveScreen(): React.JSX.Element {
   const {
@@ -31,6 +32,8 @@ export function LiveScreen(): React.JSX.Element {
     isRecording,
     triggerSimulatedSwing,
     setSimulatorSwingMode,
+    impactNeutralBaseline,
+    currentWristError,
   } = useSensor();
   
   // Toggle streaming
@@ -151,6 +154,41 @@ export function LiveScreen(): React.JSX.Element {
           <MetricRow label="Yaw" value={yaw} unit="°" />
         </View>
         
+        {/* Wrist Error (if calibrated) */}
+        {impactNeutralBaseline && (
+          <View style={styles.metricsSection}>
+            <Text style={styles.metricsTitle}>Impact Neutral Error</Text>
+            {currentWristError !== null ? (
+              <>
+                <View style={styles.errorDisplayRow}>
+                  <Text style={[
+                    styles.errorValue,
+                    { color: getErrorColor(currentWristError) }
+                  ]}>
+                    {currentWristError.toFixed(1)}°
+                  </Text>
+                  <View style={[
+                    styles.errorBadge,
+                    { backgroundColor: getErrorBgColor(currentWristError) }
+                  ]}>
+                    <Text style={[
+                      styles.errorBadgeText,
+                      { color: getErrorColor(currentWristError) }
+                    ]}>
+                      {getWristErrorRating(currentWristError)}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={styles.errorHelp}>
+                  Distance from your calibrated target position
+                </Text>
+              </>
+            ) : (
+              <Text style={styles.errorNoData}>Waiting for sensor data...</Text>
+            )}
+          </View>
+        )}
+        
         {/* Gyro */}
         <View style={styles.metricsSection}>
           <Text style={styles.metricsTitle}>Gyroscope</Text>
@@ -214,6 +252,25 @@ export function LiveScreen(): React.JSX.Element {
       </ScrollView>
     </SafeAreaView>
   );
+}
+
+// Helper functions for wrist error display
+function getErrorColor(error: number): string {
+  const rating = getWristErrorRating(error);
+  switch (rating) {
+    case 'Great': return '#22c55e';
+    case 'OK': return '#f59e0b';
+    case 'Off': return '#ef4444';
+  }
+}
+
+function getErrorBgColor(error: number): string {
+  const rating = getWristErrorRating(error);
+  switch (rating) {
+    case 'Great': return '#22c55e20';
+    case 'OK': return '#f59e0b20';
+    case 'Off': return '#ef444420';
+  }
 }
 
 const styles = StyleSheet.create({
@@ -319,5 +376,39 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#6b7280',
     textAlign: 'center',
+  },
+  errorDisplayRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#1e1e2d',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 8,
+  },
+  errorValue: {
+    fontSize: 32,
+    fontWeight: 'bold',
+    fontVariant: ['tabular-nums'],
+  },
+  errorBadge: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 16,
+  },
+  errorBadgeText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  errorHelp: {
+    fontSize: 12,
+    color: '#6b7280',
+    textAlign: 'center',
+  },
+  errorNoData: {
+    fontSize: 14,
+    color: '#6b7280',
+    textAlign: 'center',
+    padding: 16,
   },
 });

@@ -71,6 +71,12 @@ export interface SwingEvent {
   data?: {
     gyroMagnitude?: number;
     wristAngle?: number;
+    /** Wrist error vs calibrated impact neutral baseline (degrees) */
+    wristError?: number;
+    /** Quaternion at this event */
+    quat?: Quaternion;
+    /** Euler angles at this event */
+    euler?: EulerAngles;
   };
 }
 
@@ -140,6 +146,23 @@ export interface SessionMetrics {
   
   /** Downswing duration in ms */
   downswingDurationMs?: number;
+  
+  // === Impact Neutral Calibration Metrics ===
+  
+  /** Wrist error at Top of backswing (degrees from calibrated baseline) */
+  wristErrorAtTop?: number;
+  
+  /** Wrist error at Impact (degrees from calibrated baseline) */
+  wristErrorAtImpact?: number;
+  
+  /** Rating of impact position: Great/OK/Off */
+  impactNeutralRating?: string;
+  
+  /** Whether user held flexion from Top to Impact: Held/Released */
+  holdFlexionStatus?: string;
+  
+  /** Change in wrist error from Top to Impact (negative = improved) */
+  wristErrorChange?: number;
 }
 
 /**

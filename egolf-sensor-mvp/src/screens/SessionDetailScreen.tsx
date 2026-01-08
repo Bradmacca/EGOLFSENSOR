@@ -16,8 +16,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
-import { loadSession, shareSession, deleteSession } from '../storage/SessionStorage';
+import { loadSession, shareSession, deleteSession, loadImpactNeutralBaseline } from '../storage';
 import { Session, SwingEvent } from '../types';
+import { ImpactNeutralBaseline, getWristErrorRating, WristErrorRating } from '../types/calibration';
 import { formatDate, formatDuration } from '../utils/math';
 import { GyroChart } from '../components/GyroChart';
 import { MetricRow } from '../components/MetricRow';
@@ -33,15 +34,20 @@ export function SessionDetailScreen(): React.JSX.Element {
   const { sessionId } = route.params;
   
   const [session, setSession] = useState<Session | null>(null);
+  const [baseline, setBaseline] = useState<ImpactNeutralBaseline | null>(null);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   
-  // Load session data
+  // Load session data and calibration baseline
   useEffect(() => {
     async function load() {
       setLoading(true);
-      const data = await loadSession(sessionId);
+      const [data, baselineData] = await Promise.all([
+        loadSession(sessionId),
+        loadImpactNeutralBaseline(),
+      ]);
       setSession(data);
+      setBaseline(baselineData);
       setLoading(false);
     }
     load();
@@ -144,6 +150,31 @@ export function SessionDetailScreen(): React.JSX.Element {
     ? wristAtImpact - wristAtTop
     : null;
   
+  // Wrist error metrics from events (if available)
+  const wristErrorAtTop = topEvent?.data?.wristError;
+  const wristErrorAtImpact = impactEvent?.data?.wristError;
+  const impactRating = wristErrorAtImpact !== undefined 
+    ? getWristErrorRating(wristErrorAtImpact)
+    : undefined;
+  
+  // Determine Hold Flexion status
+  const getHoldFlexionStatus = (): string | undefined => {
+    if (wristErrorAtTop === undefined || wristErrorAtImpact === undefined) {
+      return undefined;
+    }
+    const errorChange = wristErrorAtImpact - wristErrorAtTop;
+    if (errorChange <= 0) {
+      return 'Held'; // Error decreased or stayed same - good!
+    } else {
+      return 'Released'; // Error increased - moved away from target
+    }
+  };
+  
+  const holdFlexionStatus = getHoldFlexionStatus();
+  const wristErrorChange = (wristErrorAtTop !== undefined && wristErrorAtImpact !== undefined)
+    ? wristErrorAtImpact - wristErrorAtTop
+    : undefined;
+  
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
@@ -210,15 +241,105 @@ export function SessionDetailScreen(): React.JSX.Element {
                     {event.data.gyroMagnitude.toFixed(0)}°/s
                   </Text>
                 )}
-                {event.confidence && (
-                  <StatusChip
-                    label={`${(event.confidence * 100).toFixed(0)}%`}
-                    status={event.confidence > 0.7 ? 'active' : 'warning'}
-                    size="small"
-                  />
+                {event.data?.wristError !== undefined && (
+                  <View style={[
+                    styles.wristErrorBadge,
+                    { backgroundColor: getWristErrorBadgeColor(getWristErrorRating(event.data.wristError)) }
+                  ]}>
+                    <Text style={styles.wristErrorText}>
+                      {event.data.wristError.toFixed(1)}°
+                    </Text>
+                  </View>
                 )}
               </View>
             ))
+          )}
+        </View>
+        
+        {/* Impact Neutral Metrics */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Impact Neutral Analysis</Text>
+          
+          {!baseline ? (
+            <View style={styles.noCalibrationBox}>
+              <Text style={styles.noCalibrationText}>
+                ⚠️ No Impact Neutral calibration found.{'\n'}
+                Calibrate to see wrist error metrics.
+              </Text>
+            </View>
+          ) : wristErrorAtImpact === undefined ? (
+            <View style={styles.noDataBox}>
+              <Text style={styles.noDataText}>
+                No wrist error data available for this session.
+                This may be because the session was recorded before calibration.
+              </Text>
+            </View>
+          ) : (
+            <>
+              {/* Impact Rating */}
+              <View style={styles.impactRatingCard}>
+                <Text style={styles.impactRatingLabel}>Impact Neutral Error</Text>
+                <View style={styles.impactRatingRow}>
+                  <Text style={[
+                    styles.impactRatingValue,
+                    { color: getRatingColor(impactRating) }
+                  ]}>
+                    {wristErrorAtImpact.toFixed(1)}°
+                  </Text>
+                  <View style={[
+                    styles.ratingBadge,
+                    { backgroundColor: getRatingBgColor(impactRating) }
+                  ]}>
+                    <Text style={[
+                      styles.ratingBadgeText,
+                      { color: getRatingColor(impactRating) }
+                    ]}>
+                      {impactRating}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+              
+              {/* Hold Flexion Status */}
+              {holdFlexionStatus && (
+                <View style={styles.holdFlexionCard}>
+                  <Text style={styles.holdFlexionLabel}>Hold Flexion</Text>
+                  <View style={styles.holdFlexionRow}>
+                    <Text style={[
+                      styles.holdFlexionValue,
+                      { color: holdFlexionStatus === 'Held' ? '#22c55e' : '#ef4444' }
+                    ]}>
+                      {holdFlexionStatus}
+                    </Text>
+                    <Text style={styles.holdFlexionExplain}>
+                      {holdFlexionStatus === 'Held' 
+                        ? 'Maintained or improved toward target'
+                        : 'Moved away from target position'}
+                    </Text>
+                  </View>
+                </View>
+              )}
+              
+              {/* Detailed Metrics */}
+              <MetricRow
+                label="Error at Top"
+                value={wristErrorAtTop?.toFixed(1) ?? '--'}
+                unit="°"
+              />
+              <MetricRow
+                label="Error at Impact"
+                value={wristErrorAtImpact?.toFixed(1) ?? '--'}
+                unit="°"
+                highlight={impactRating === 'Great'}
+              />
+              {wristErrorChange !== undefined && (
+                <MetricRow
+                  label="Error Change (Top→Impact)"
+                  value={`${wristErrorChange >= 0 ? '+' : ''}${wristErrorChange.toFixed(1)}`}
+                  unit="°"
+                />
+              )}
+            </>
           )}
         </View>
         
@@ -358,6 +479,32 @@ function getEventColor(type: string): string {
   return colors[type] || '#9ca3af';
 }
 
+function getRatingColor(rating?: WristErrorRating): string {
+  switch (rating) {
+    case 'Great': return '#22c55e';
+    case 'OK': return '#f59e0b';
+    case 'Off': return '#ef4444';
+    default: return '#9ca3af';
+  }
+}
+
+function getRatingBgColor(rating?: WristErrorRating): string {
+  switch (rating) {
+    case 'Great': return '#22c55e20';
+    case 'OK': return '#f59e0b20';
+    case 'Off': return '#ef444420';
+    default: return '#1e1e2d';
+  }
+}
+
+function getWristErrorBadgeColor(rating: WristErrorRating): string {
+  switch (rating) {
+    case 'Great': return '#22c55e40';
+    case 'OK': return '#f59e0b40';
+    case 'Off': return '#ef444440';
+  }
+}
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -489,6 +636,91 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#9ca3af',
     fontVariant: ['tabular-nums'],
+  },
+  wristErrorBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  wristErrorText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  noCalibrationBox: {
+    backgroundColor: '#f59e0b20',
+    borderRadius: 8,
+    padding: 16,
+  },
+  noCalibrationText: {
+    fontSize: 14,
+    color: '#f59e0b',
+    lineHeight: 20,
+  },
+  noDataBox: {
+    backgroundColor: '#1e1e2d',
+    borderRadius: 8,
+    padding: 16,
+  },
+  noDataText: {
+    fontSize: 14,
+    color: '#6b7280',
+    lineHeight: 20,
+  },
+  impactRatingCard: {
+    backgroundColor: '#1e1e2d',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+  },
+  impactRatingLabel: {
+    fontSize: 12,
+    color: '#9ca3af',
+    marginBottom: 8,
+  },
+  impactRatingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  impactRatingValue: {
+    fontSize: 36,
+    fontWeight: 'bold',
+    fontVariant: ['tabular-nums'],
+  },
+  ratingBadge: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 16,
+  },
+  ratingBadgeText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  holdFlexionCard: {
+    backgroundColor: '#1e1e2d',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+  },
+  holdFlexionLabel: {
+    fontSize: 12,
+    color: '#9ca3af',
+    marginBottom: 8,
+  },
+  holdFlexionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  holdFlexionValue: {
+    fontSize: 20,
+    fontWeight: '600',
+  },
+  holdFlexionExplain: {
+    flex: 1,
+    fontSize: 12,
+    color: '#6b7280',
   },
   placeholderMetrics: {
     marginTop: 16,

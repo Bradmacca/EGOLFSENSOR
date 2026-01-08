@@ -16,6 +16,7 @@ import {
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
 import { useSensor } from '../context';
 import { BLEManager } from '../ble/BLEManager';
 import { DeviceListItem } from '../components/DeviceListItem';
@@ -23,11 +24,13 @@ import { StatusChip } from '../components/StatusChip';
 import { DiscoveredDevice } from '../types/ble';
 
 export function ConnectScreen(): React.JSX.Element {
+  const navigation = useNavigation();
   const {
     isUsingSimulator,
     setUseSimulator,
     bleState,
     sensorStatus,
+    impactNeutralBaseline,
   } = useSensor();
   
   const [isConnecting, setIsConnecting] = useState<string | null>(null);
@@ -208,6 +211,35 @@ export function ConnectScreen(): React.JSX.Element {
         </View>
       )}
       
+      {/* Calibration Section */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Impact Neutral Calibration</Text>
+        
+        {impactNeutralBaseline ? (
+          <View style={styles.calibrationStatus}>
+            <StatusChip label="Calibrated" status="active" size="small" />
+            <Text style={styles.calibrationDate}>
+              Set your target impact wrist position
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.calibrationWarning}>
+            <Text style={styles.calibrationWarningText}>
+              ⚠️ Not calibrated. Set your target impact position for wrist error metrics.
+            </Text>
+          </View>
+        )}
+        
+        <TouchableOpacity
+          style={styles.calibrateButton}
+          onPress={() => (navigation as any).navigate('Calibration')}
+        >
+          <Text style={styles.calibrateButtonText}>
+            {impactNeutralBaseline ? 'Recalibrate' : 'Calibrate Now'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+      
       {/* Help Text */}
       <View style={styles.helpSection}>
         <Text style={styles.helpTitle}>Supported Devices</Text>
@@ -386,5 +418,36 @@ const styles = StyleSheet.create({
     color: '#f59e0b',
     marginTop: 12,
     fontStyle: 'italic',
+  },
+  calibrationStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+  },
+  calibrationDate: {
+    fontSize: 13,
+    color: '#9ca3af',
+  },
+  calibrationWarning: {
+    backgroundColor: '#f59e0b20',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+  },
+  calibrationWarningText: {
+    fontSize: 13,
+    color: '#f59e0b',
+  },
+  calibrateButton: {
+    backgroundColor: '#3b82f6',
+    borderRadius: 8,
+    padding: 14,
+    alignItems: 'center',
+  },
+  calibrateButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#ffffff',
   },
 });

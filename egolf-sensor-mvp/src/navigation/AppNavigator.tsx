@@ -9,7 +9,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { View, Text, StyleSheet } from 'react-native';
-import Svg, { Path, Circle, Rect, G } from 'react-native-svg';
+import Svg, { Path, Circle, Rect, G, Line } from 'react-native-svg';
 
 import {
   ConnectScreen,
@@ -17,6 +17,8 @@ import {
   RecordScreen,
   SessionsScreen,
   SessionDetailScreen,
+  CalibrationScreen,
+  SettingsScreen,
 } from '../screens';
 
 // Tab icon components
@@ -78,8 +80,25 @@ function SessionsIcon({ focused }: { focused: boolean }) {
   );
 }
 
-// Stack navigators for each tab
+function SettingsIcon({ focused }: { focused: boolean }) {
+  const color = focused ? '#22c55e' : '#6b7280';
+  return (
+    <Svg width={24} height={24} viewBox="0 0 24 24" fill="none">
+      <Circle cx={12} cy={12} r={3} stroke={color} strokeWidth={2} />
+      <Path
+        d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"
+        stroke={color}
+        strokeWidth={2}
+        strokeLinecap="round"
+      />
+    </Svg>
+  );
+}
+
+// Stack navigators for nested navigation
 const SessionsStack = createNativeStackNavigator();
+const ConnectStack = createNativeStackNavigator();
+const RootStack = createNativeStackNavigator();
 
 function SessionsStackNavigator() {
   return (
@@ -94,50 +113,89 @@ function SessionsStackNavigator() {
   );
 }
 
+function ConnectStackNavigator() {
+  return (
+    <ConnectStack.Navigator
+      screenOptions={{
+        headerShown: false,
+      }}
+    >
+      <ConnectStack.Screen name="ConnectMain" component={ConnectScreen} />
+    </ConnectStack.Navigator>
+  );
+}
+
 // Bottom Tab Navigator
 const Tab = createBottomTabNavigator();
 
+function MainTabNavigator() {
+  return (
+    <Tab.Navigator
+      screenOptions={{
+        headerShown: false,
+        tabBarStyle: styles.tabBar,
+        tabBarActiveTintColor: '#22c55e',
+        tabBarInactiveTintColor: '#6b7280',
+        tabBarLabelStyle: styles.tabBarLabel,
+      }}
+    >
+      <Tab.Screen
+        name="Connect"
+        component={ConnectStackNavigator}
+        options={{
+          tabBarIcon: ({ focused }) => <ConnectIcon focused={focused} />,
+        }}
+      />
+      <Tab.Screen
+        name="Live"
+        component={LiveScreen}
+        options={{
+          tabBarIcon: ({ focused }) => <LiveIcon focused={focused} />,
+        }}
+      />
+      <Tab.Screen
+        name="Record"
+        component={RecordScreen}
+        options={{
+          tabBarIcon: ({ focused }) => <RecordIcon focused={focused} />,
+        }}
+      />
+      <Tab.Screen
+        name="Sessions"
+        component={SessionsStackNavigator}
+        options={{
+          tabBarIcon: ({ focused }) => <SessionsIcon focused={focused} />,
+        }}
+      />
+      <Tab.Screen
+        name="Settings"
+        component={SettingsScreen}
+        options={{
+          tabBarIcon: ({ focused }) => <SettingsIcon focused={focused} />,
+        }}
+      />
+    </Tab.Navigator>
+  );
+}
+
+// Root navigator with modal screens
 export function AppNavigator(): React.JSX.Element {
   return (
     <NavigationContainer>
-      <Tab.Navigator
+      <RootStack.Navigator
         screenOptions={{
           headerShown: false,
-          tabBarStyle: styles.tabBar,
-          tabBarActiveTintColor: '#22c55e',
-          tabBarInactiveTintColor: '#6b7280',
-          tabBarLabelStyle: styles.tabBarLabel,
         }}
       >
-        <Tab.Screen
-          name="Connect"
-          component={ConnectScreen}
+        <RootStack.Screen name="Main" component={MainTabNavigator} />
+        <RootStack.Screen 
+          name="Calibration" 
+          component={CalibrationScreen}
           options={{
-            tabBarIcon: ({ focused }) => <ConnectIcon focused={focused} />,
+            presentation: 'modal',
           }}
         />
-        <Tab.Screen
-          name="Live"
-          component={LiveScreen}
-          options={{
-            tabBarIcon: ({ focused }) => <LiveIcon focused={focused} />,
-          }}
-        />
-        <Tab.Screen
-          name="Record"
-          component={RecordScreen}
-          options={{
-            tabBarIcon: ({ focused }) => <RecordIcon focused={focused} />,
-          }}
-        />
-        <Tab.Screen
-          name="Sessions"
-          component={SessionsStackNavigator}
-          options={{
-            tabBarIcon: ({ focused }) => <SessionsIcon focused={focused} />,
-          }}
-        />
-      </Tab.Navigator>
+      </RootStack.Navigator>
     </NavigationContainer>
   );
 }

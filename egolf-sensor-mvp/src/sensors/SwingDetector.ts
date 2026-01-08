@@ -6,12 +6,15 @@
  * - Top of Backswing: local minimum/inflection after backswing peak
  * - Impact: largest gyro spike after transition
  * 
+ * Now includes wrist error computation against calibrated Impact Neutral baseline.
+ * 
  * TODO: Refine thresholds with real sensor data
  * TODO: Add more sophisticated detection (machine learning, etc.)
  */
 
-import { SensorSample, SwingEvent, SwingEventType } from '../types';
-import { vectorMagnitude } from '../utils/math';
+import { SensorSample, SwingEvent, SwingEventType, Quaternion, EulerAngles } from '../types';
+import { ImpactNeutralBaseline } from '../types/calibration';
+import { vectorMagnitude, calculateWristError } from '../utils/math';
 
 /**
  * Configuration for swing detection
@@ -74,11 +77,35 @@ export class SwingDetector {
   private backswingPeakTime: number = 0;
   private currentSwingEvents: SwingEvent[] = [];
   
+  // Sample buffer for orientation at events
+  private recentSamples: SensorSample[] = [];
+  private readonly SAMPLE_BUFFER_SIZE = 50; // Keep last 50 samples for event orientation lookup
+  
+  // Impact Neutral baseline for wrist error computation
+  private impactNeutralBaseline: ImpactNeutralBaseline | null = null;
+  
   // Callback for detected events
   private onEventCallback: ((event: SwingEvent) => void) | null = null;
   
+  // Callback for impact feedback (called when impact is detected with wrist error)
+  private onImpactFeedbackCallback: ((wristError: number) => void) | null = null;
+  
   constructor(config: Partial<SwingDetectorConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
+  }
+  
+  /**
+   * Set the Impact Neutral baseline for wrist error computation
+   */
+  setImpactNeutralBaseline(baseline: ImpactNeutralBaseline | null): void {
+    this.impactNeutralBaseline = baseline;
+  }
+  
+  /**
+   * Set callback for impact feedback (for audio/haptic)
+   */
+  onImpactFeedback(callback: (wristError: number) => void): void {
+    this.onImpactFeedbackCallback = callback;
   }
   
   /**
@@ -99,6 +126,12 @@ export class SwingDetector {
     this.gyroMagnitudeBuffer.push(gyroMag);
     this.timestampBuffer.push(timestamp);
     
+    // Keep sample buffer for orientation lookup
+    this.recentSamples.push(sample);
+    if (this.recentSamples.length > this.SAMPLE_BUFFER_SIZE) {
+      this.recentSamples.shift();
+    }
+    
     // Keep buffer size manageable
     const maxBufferSize = 500; // 5 seconds at 100Hz
     if (this.gyroMagnitudeBuffer.length > maxBufferSize) {
@@ -117,6 +150,38 @@ export class SwingDetector {
     }
     
     return event;
+  }
+  
+  /**
+   * Compute wrist error for a sample against the baseline
+   */
+  private computeWristError(sample: SensorSample): number | undefined {
+    if (!this.impactNeutralBaseline) {
+      return undefined;
+    }
+    
+    return calculateWristError(
+      { quat: sample.quat, euler: sample.euler },
+      { quat: this.impactNeutralBaseline.quat, euler: this.impactNeutralBaseline.euler }
+    );
+  }
+  
+  /**
+   * Get sample closest to a timestamp from recent buffer
+   */
+  private getSampleAtTime(timestampMs: number): SensorSample | undefined {
+    let closest: SensorSample | undefined;
+    let minDiff = Infinity;
+    
+    for (const sample of this.recentSamples) {
+      const diff = Math.abs(sample.timestampMs - timestampMs);
+      if (diff < minDiff) {
+        minDiff = diff;
+        closest = sample;
+      }
+    }
+    
+    return closest;
   }
   
   /**
@@ -173,7 +238,11 @@ export class SwingDetector {
             type: 'start',
             timestampMs: this.potentialStartTime,
             confidence: 0.8,
-            data: { gyroMagnitude: gyroMag },
+            data: { 
+              gyroMagnitude: gyroMag,
+              quat: sample.quat,
+              euler: sample.euler,
+            },
           };
           this.currentSwingEvents.push(detectedEvent);
           this.log(`SWING START confirmed at ${this.potentialStartTime}ms`);
@@ -194,17 +263,25 @@ export class SwingDetector {
           // Detected transition zone (top of backswing)
           this.state = 'transition';
           
+          // Get sample closest to the top timestamp
+          const topTimestamp = this.backswingPeakTime + 50;
+          const topSample = this.getSampleAtTime(topTimestamp) || sample;
+          const wristError = this.computeWristError(topSample);
+          
           detectedEvent = {
             type: 'top',
-            timestampMs: this.backswingPeakTime + 50, // Approximate top
+            timestampMs: topTimestamp,
             confidence: 0.6,
             data: { 
               gyroMagnitude: this.backswingPeakMagnitude,
-              wristAngle: sample.euler?.roll,
+              wristAngle: topSample.euler?.roll,
+              wristError,
+              quat: topSample.quat,
+              euler: topSample.euler,
             },
           };
           this.currentSwingEvents.push(detectedEvent);
-          this.log(`TOP detected at ~${detectedEvent.timestampMs}ms`);
+          this.log(`TOP detected at ~${detectedEvent.timestampMs}ms, wrist error: ${wristError?.toFixed(1) ?? 'N/A'}°`);
         }
         
         // Timeout if backswing takes too long
@@ -243,17 +320,29 @@ export class SwingDetector {
           // We've passed the peak - that was impact!
           this.state = 'follow_through';
           
+          // Get sample closest to the impact timestamp
+          const impactSample = this.getSampleAtTime(this.backswingPeakTime) || sample;
+          const wristError = this.computeWristError(impactSample);
+          
           detectedEvent = {
             type: 'impact',
             timestampMs: this.backswingPeakTime,
             confidence: 0.7,
             data: { 
               gyroMagnitude: this.backswingPeakMagnitude,
-              wristAngle: sample.euler?.roll,
+              wristAngle: impactSample.euler?.roll,
+              wristError,
+              quat: impactSample.quat,
+              euler: impactSample.euler,
             },
           };
           this.currentSwingEvents.push(detectedEvent);
-          this.log(`IMPACT detected at ${this.backswingPeakTime}ms, peak gyro: ${this.backswingPeakMagnitude.toFixed(0)}`);
+          this.log(`IMPACT detected at ${this.backswingPeakTime}ms, peak gyro: ${this.backswingPeakMagnitude.toFixed(0)}, wrist error: ${wristError?.toFixed(1) ?? 'N/A'}°`);
+          
+          // Trigger feedback callback if available
+          if (wristError !== undefined && this.onImpactFeedbackCallback) {
+            this.onImpactFeedbackCallback(wristError);
+          }
         }
         
         // Timeout
@@ -318,6 +407,7 @@ export class SwingDetector {
     this.state = 'idle';
     this.gyroMagnitudeBuffer = [];
     this.timestampBuffer = [];
+    this.recentSamples = [];
     this.potentialStartTime = 0;
     this.lastSwingEndTime = 0;
     this.backswingPeakMagnitude = 0;
@@ -345,10 +435,15 @@ export class SwingDetector {
  */
 export function analyzeSessionSwings(
   samples: SensorSample[],
-  config: Partial<SwingDetectorConfig> = {}
+  config: Partial<SwingDetectorConfig> = {},
+  impactNeutralBaseline?: ImpactNeutralBaseline | null
 ): SwingEvent[] {
   const detector = new SwingDetector(config);
   const events: SwingEvent[] = [];
+  
+  if (impactNeutralBaseline) {
+    detector.setImpactNeutralBaseline(impactNeutralBaseline);
+  }
   
   detector.onEvent((event) => {
     events.push(event);

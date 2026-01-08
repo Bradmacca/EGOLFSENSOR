@@ -9,17 +9,24 @@ A React Native Expo app for golf swing training using an IMU sensor (WT9011DCL o
 - **Live Visualization**: Real-time wrist angle gauge and sensor metrics
 - **Recording**: Record swing sessions at up to 200Hz sample rate
 - **Swing Detection**: Automatic detection of swing events (Start, Top, Impact)
+- **Impact Neutral Calibration**: Set YOUR ideal impact wrist position as the baseline target
+- **Wrist Error Metrics**: Measure how close you get to your target at Top and Impact
+- **Hold Flexion Tracking**: Shows whether you maintained or released wrist angle from Top to Impact
+- **Audio/Haptic Feedback**: Optional beep/vibrate when Impact is within "Great" threshold
 - **Session Management**: View, analyze, and export recorded sessions
 - **Export**: Share session data as CSV or JSONL files
 
 ## Screenshots
 
-The app has 4 main screens:
+The app has 5 main screens:
 
 1. **Connect** - Scan for BLE devices or enable simulated sensor
-2. **Live** - Real-time sensor visualization with wrist angle gauge
+2. **Live** - Real-time sensor visualization with wrist angle gauge + wrist error
 3. **Record** - Record swing sessions with live timer and event detection
 4. **Sessions** - Browse, analyze, and export recorded sessions
+5. **Settings** - Configure feedback and wrist error thresholds
+
+Plus a **Calibration** modal screen for setting your Impact Neutral baseline.
 
 ## Requirements
 
@@ -94,25 +101,33 @@ egolf-sensor-mvp/
 │   ├── sensors/                # Sensor data handling
 │   │   ├── SensorAdapter.ts    # Adapter interface for sensors
 │   │   ├── SimulatedSensor.ts  # Simulated sensor for testing
-│   │   └── SwingDetector.ts    # Swing event detection algorithm
-│   ├── storage/                # Session storage
-│   │   └── SessionStorage.ts   # JSONL/JSON/CSV file operations
+│   │   └── SwingDetector.ts    # Swing event detection + wrist error
+│   ├── storage/                # Session & calibration storage
+│   │   ├── SessionStorage.ts   # JSONL/JSON/CSV file operations
+│   │   └── CalibrationStorage.ts # Baseline & settings persistence
 │   ├── screens/                # App screens
 │   │   ├── ConnectScreen.tsx   # BLE scan & simulator toggle
-│   │   ├── LiveScreen.tsx      # Real-time visualization
+│   │   ├── LiveScreen.tsx      # Real-time visualization + wrist error
 │   │   ├── RecordScreen.tsx    # Recording interface
 │   │   ├── SessionsScreen.tsx  # Session list
-│   │   └── SessionDetailScreen.tsx # Session analysis
+│   │   ├── SessionDetailScreen.tsx # Session analysis + wrist error metrics
+│   │   ├── CalibrationScreen.tsx # Impact Neutral calibration flow
+│   │   └── SettingsScreen.tsx  # App settings & thresholds
 │   ├── components/             # Reusable UI components
 │   │   ├── WristAngleGauge.tsx # Semi-circular gauge
 │   │   ├── GyroChart.tsx       # Gyro magnitude chart
 │   │   ├── StatusChip.tsx      # Status indicator
 │   │   └── ...
 │   ├── context/                # React context providers
-│   │   └── SensorContext.tsx   # Global sensor state
+│   │   └── SensorContext.tsx   # Global sensor state + calibration
 │   ├── navigation/             # React Navigation setup
 │   ├── types/                  # TypeScript type definitions
+│   │   ├── sensor.ts           # SensorSample, Session, Events
+│   │   ├── ble.ts              # BLE types
+│   │   └── calibration.ts      # Baseline, Settings, Thresholds
 │   └── utils/                  # Utility functions
+│       ├── math.ts             # Quaternion ops, wrist error calc
+│       └── feedback.ts         # Audio/haptic feedback
 ├── App.tsx                     # App entry point
 └── app.json                    # Expo configuration
 ```
@@ -184,6 +199,31 @@ export const WT9011DCL_CONFIG = {
 7. Monitor BLE data in console logs
 8. Adjust packet parsing based on actual data format
 
+## Impact Neutral Calibration
+
+The calibration feature allows you to set YOUR ideal impact wrist position as the baseline target. This is different from assuming 0° is ideal - every golfer has a slightly different target position.
+
+### How It Works
+
+1. **Calibrate**: Go to Connect screen → "Calibrate Now" or Settings → "Calibrate"
+2. **Position**: Assume your ideal impact position (slightly flexed lead wrist, hands ahead, shaft lean)
+3. **Capture**: Hold still for 2 seconds while the app captures the baseline orientation
+4. **Use**: The app now measures how close you get to this position at Top and Impact
+
+### Metrics Displayed
+
+- **Impact Neutral Error**: Angular distance from your calibrated baseline (degrees)
+- **Rating**: Great (≤5°), OK (≤15°), Off (>15°) - thresholds configurable in Settings
+- **Hold Flexion**: 
+  - "Held" = Error decreased or stayed same from Top to Impact (you maintained/improved toward target)
+  - "Released" = Error increased (you moved away from target position)
+
+### Feedback
+
+Enable audio/haptic feedback in Settings:
+- Beep sound when Impact error is within "Great" threshold
+- Vibration on impact events
+
 ## Swing Detection Algorithm
 
 The current v1 algorithm uses gyro magnitude thresholds:
@@ -193,6 +233,8 @@ The current v1 algorithm uses gyro magnitude thresholds:
 3. **Impact**: Largest gyro spike > 500°/s after transition
 
 Parameters can be tuned in `src/sensors/SwingDetector.ts`.
+
+When Impact Neutral calibration is set, the SwingDetector also computes wrist error at each detected event.
 
 ## Export Formats
 

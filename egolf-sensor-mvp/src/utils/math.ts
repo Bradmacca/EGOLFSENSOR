@@ -165,3 +165,141 @@ export function calculateDerivative(
   if (deltaTimeMs === 0) return 0;
   return (current - previous) / (deltaTimeMs / 1000);
 }
+
+// ============ Quaternion Operations for Wrist Error ============
+
+/**
+ * Quaternion conjugate (inverse for unit quaternions)
+ */
+export function quaternionConjugate(q: Quaternion): Quaternion {
+  return {
+    w: q.w,
+    x: -q.x,
+    y: -q.y,
+    z: -q.z,
+  };
+}
+
+/**
+ * Quaternion multiplication: q1 * q2
+ */
+export function quaternionMultiply(q1: Quaternion, q2: Quaternion): Quaternion {
+  return {
+    w: q1.w * q2.w - q1.x * q2.x - q1.y * q2.y - q1.z * q2.z,
+    x: q1.w * q2.x + q1.x * q2.w + q1.y * q2.z - q1.z * q2.y,
+    y: q1.w * q2.y - q1.x * q2.z + q1.y * q2.w + q1.z * q2.x,
+    z: q1.w * q2.z + q1.x * q2.y - q1.y * q2.x + q1.z * q2.w,
+  };
+}
+
+/**
+ * Calculate the angular difference between two quaternions in degrees
+ * Returns the angle of the shortest rotation from q1 to q2
+ */
+export function quaternionAngularDifference(q1: Quaternion, q2: Quaternion): number {
+  // Calculate relative rotation: q_diff = q2 * q1^(-1)
+  const q1Inv = quaternionConjugate(q1);
+  const qDiff = quaternionMultiply(q2, q1Inv);
+  
+  // Normalize the result
+  const normalized = normalizeQuaternion(qDiff);
+  
+  // The angle of rotation is 2 * acos(w)
+  // Clamp w to [-1, 1] to handle numerical errors
+  const w = clamp(normalized.w, -1, 1);
+  const angleRad = 2 * Math.acos(Math.abs(w));
+  
+  return angleRad * (180 / Math.PI);
+}
+
+/**
+ * Calculate wrist error (angular difference) between current orientation and baseline
+ * Uses quaternion if available, falls back to euler angles
+ */
+export function calculateWristError(
+  current: { quat?: Quaternion; euler?: EulerAngles },
+  baseline: { quat?: Quaternion; euler?: EulerAngles }
+): number {
+  // Prefer quaternion comparison
+  if (current.quat && baseline.quat) {
+    return quaternionAngularDifference(baseline.quat, current.quat);
+  }
+  
+  // Fall back to euler angle comparison (less accurate but usable)
+  const currentEuler = current.euler || (current.quat ? quaternionToEuler(current.quat) : null);
+  const baselineEuler = baseline.euler || (baseline.quat ? quaternionToEuler(baseline.quat) : null);
+  
+  if (currentEuler && baselineEuler) {
+    // Calculate RMS difference across all angles
+    const rollDiff = currentEuler.roll - baselineEuler.roll;
+    const pitchDiff = currentEuler.pitch - baselineEuler.pitch;
+    const yawDiff = currentEuler.yaw - baselineEuler.yaw;
+    
+    // Primarily focus on roll (wrist flexion) and pitch (radial/ulnar deviation)
+    // Weight roll higher as it's the primary wrist angle
+    return Math.sqrt(rollDiff * rollDiff * 2 + pitchDiff * pitchDiff) / Math.sqrt(3);
+  }
+  
+  return 0;
+}
+
+/**
+ * Average multiple quaternions (for calibration sampling)
+ */
+export function averageQuaternions(quaternions: Quaternion[]): Quaternion {
+  if (quaternions.length === 0) {
+    return { w: 1, x: 0, y: 0, z: 0 };
+  }
+  
+  if (quaternions.length === 1) {
+    return normalizeQuaternion(quaternions[0]);
+  }
+  
+  // Simple averaging (works well for quaternions that are close together)
+  // For more accuracy, use SLERP or eigenvector methods
+  let sumW = 0, sumX = 0, sumY = 0, sumZ = 0;
+  
+  // Ensure all quaternions are in the same hemisphere (dot product > 0)
+  const reference = quaternions[0];
+  
+  for (const q of quaternions) {
+    // Check if quaternion needs to be flipped
+    const dot = reference.w * q.w + reference.x * q.x + reference.y * q.y + reference.z * q.z;
+    const sign = dot < 0 ? -1 : 1;
+    
+    sumW += sign * q.w;
+    sumX += sign * q.x;
+    sumY += sign * q.y;
+    sumZ += sign * q.z;
+  }
+  
+  return normalizeQuaternion({
+    w: sumW / quaternions.length,
+    x: sumX / quaternions.length,
+    y: sumY / quaternions.length,
+    z: sumZ / quaternions.length,
+  });
+}
+
+/**
+ * Average multiple euler angles (for calibration sampling)
+ */
+export function averageEulerAngles(angles: EulerAngles[]): EulerAngles {
+  if (angles.length === 0) {
+    return { roll: 0, pitch: 0, yaw: 0 };
+  }
+  
+  let sumRoll = 0, sumPitch = 0, sumYaw = 0;
+  
+  for (const a of angles) {
+    sumRoll += a.roll;
+    sumPitch += a.pitch;
+    sumYaw += a.yaw;
+  }
+  
+  return {
+    roll: sumRoll / angles.length,
+    pitch: sumPitch / angles.length,
+    yaw: sumYaw / angles.length,
+  };
+}

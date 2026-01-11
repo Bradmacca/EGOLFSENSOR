@@ -20,10 +20,16 @@ import { useSensor } from '../context';
 import { StatusChip } from '../components/StatusChip';
 import { MetricRow } from '../components/MetricRow';
 import { WristAngleGauge } from '../components/WristAngleGauge';
+import { PlacementGuideModal } from '../components/PlacementGuideModal';
 import {
   saveImpactNeutralBaseline,
   loadImpactNeutralBaseline,
   clearImpactNeutralBaseline,
+  saveAddressReference,
+  saveImpactReference,
+  loadAddressReference,
+  loadImpactReference,
+  loadCalibrationPoints,
 } from '../storage/CalibrationStorage';
 import {
   ImpactNeutralBaseline,
@@ -32,6 +38,7 @@ import { Quaternion, EulerAngles, SensorSample } from '../types';
 import { averageQuaternions, averageEulerAngles, formatDate } from '../utils/math';
 
 type CalibrationState = 'idle' | 'countdown' | 'capturing' | 'complete' | 'error';
+type CalibrationStep = 'address' | 'impact';
 
 const COUNTDOWN_SECONDS = 3;
 const CAPTURE_DURATION_MS = 2000; // 2 seconds of capture
@@ -49,10 +56,14 @@ export function CalibrationScreen(): React.JSX.Element {
   } = useSensor();
   
   const [calibrationState, setCalibrationState] = useState<CalibrationState>('idle');
+  const [calibrationStep, setCalibrationStep] = useState<CalibrationStep>('address');
   const [countdown, setCountdown] = useState(COUNTDOWN_SECONDS);
   const [captureProgress, setCaptureProgress] = useState(0);
   const [existingBaseline, setExistingBaseline] = useState<ImpactNeutralBaseline | null>(null);
+  const [existingAddress, setExistingAddress] = useState<ImpactNeutralBaseline | null>(null);
+  const [existingImpact, setExistingImpact] = useState<ImpactNeutralBaseline | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showPlacementGuide, setShowPlacementGuide] = useState(false);
   
   // Capture buffers
   const capturedSamplesRef = useRef<SensorSample[]>([]);
@@ -63,7 +74,17 @@ export function CalibrationScreen(): React.JSX.Element {
   
   // Load existing calibration on mount
   useEffect(() => {
-    loadImpactNeutralBaseline().then(setExistingBaseline);
+    async function loadCalibration() {
+      const [baseline, address, impact] = await Promise.all([
+        loadImpactNeutralBaseline(),
+        loadAddressReference(),
+        loadImpactReference(),
+      ]);
+      setExistingBaseline(baseline);
+      setExistingAddress(address);
+      setExistingImpact(impact);
+    }
+    loadCalibration();
   }, []);
   
   // Capture samples during calibration
@@ -153,16 +174,24 @@ export function CalibrationScreen(): React.JSX.Element {
       baseline.euler = averageEulerAngles(eulerAngles);
     }
     
-    // Save baseline
+    // Save baseline based on current step
     try {
-      await saveImpactNeutralBaseline(baseline);
-      setExistingBaseline(baseline);
+      if (calibrationStep === 'address') {
+        await saveAddressReference(baseline);
+        setExistingAddress(baseline);
+      } else {
+        await saveImpactReference(baseline);
+        setExistingImpact(baseline);
+        // Also update legacy baseline
+        await saveImpactNeutralBaseline(baseline);
+        setExistingBaseline(baseline);
+      }
       setCalibrationState('complete');
     } catch (err: any) {
       setCalibrationState('error');
       setError('Failed to save calibration data');
     }
-  }, [sensorStatus.deviceId, isUsingSimulator]);
+  }, [sensorStatus.deviceId, isUsingSimulator, calibrationStep]);
   
   // Reset calibration
   const resetCalibration = useCallback(() => {
@@ -172,6 +201,18 @@ export function CalibrationScreen(): React.JSX.Element {
     setError(null);
     capturedSamplesRef.current = [];
   }, []);
+
+  // Move to next step
+  const moveToNextStep = useCallback(() => {
+    if (calibrationStep === 'address') {
+      setCalibrationStep('impact');
+      resetCalibration();
+    } else {
+      // Both steps complete, go back to address for recalibration
+      setCalibrationStep('address');
+      resetCalibration();
+    }
+  }, [calibrationStep, resetCalibration]);
   
   // Clear existing calibration
   const handleClearCalibration = useCallback(() => {
@@ -221,18 +262,63 @@ export function CalibrationScreen(): React.JSX.Element {
           </View>
         </View>
         
+        {/* Step Indicator */}
+        <View style={styles.stepIndicator}>
+          <View style={[styles.step, calibrationStep === 'address' && styles.stepActive]}>
+            <Text style={[styles.stepText, calibrationStep === 'address' && styles.stepTextActive]}>
+              1. Address
+            </Text>
+            {existingAddress && (
+              <View style={styles.stepCheck}>
+                <Text style={styles.stepCheckText}>✓</Text>
+              </View>
+            )}
+          </View>
+          <View style={styles.stepConnector} />
+          <View style={[styles.step, calibrationStep === 'impact' && styles.stepActive]}>
+            <Text style={[styles.stepText, calibrationStep === 'impact' && styles.stepTextActive]}>
+              2. Impact
+            </Text>
+            {existingImpact && (
+              <View style={styles.stepCheck}>
+                <Text style={styles.stepCheckText}>✓</Text>
+              </View>
+            )}
+          </View>
+        </View>
+
         {/* Instructions */}
         <View style={styles.instructionsSection}>
-          <Text style={styles.instructionsTitle}>Instructions</Text>
-          <Text style={styles.instructionsText}>
-            1. Attach the sensor to your lead wrist{'\n'}
-            2. Assume your ideal impact position:{'\n'}
-            {'   '}• Slightly flexed lead wrist (your target){'\n'}
-            {'   '}• Hands ahead of the ball{'\n'}
-            {'   '}• Proper shaft lean{'\n'}
-            3. Hold completely still for 2 seconds{'\n'}
-            4. This position will be your baseline target
-          </Text>
+          <View style={styles.instructionsHeader}>
+            <Text style={styles.instructionsTitle}>Instructions</Text>
+            <TouchableOpacity
+              onPress={() => setShowPlacementGuide(true)}
+              style={styles.helpButton}
+            >
+              <Text style={styles.helpButtonText}>?</Text>
+            </TouchableOpacity>
+          </View>
+          {calibrationStep === 'address' ? (
+            <Text style={styles.instructionsText}>
+              1. Attach the sensor to your lead wrist{'\n'}
+              2. Assume your address position (setup position):{'\n'}
+              {'   '}• Natural, comfortable stance{'\n'}
+              {'   '}• Normal wrist position{'\n'}
+              {'   '}• Ready to start your swing{'\n'}
+              3. Hold completely still for 2 seconds{'\n'}
+              4. This position will be your address reference
+            </Text>
+          ) : (
+            <Text style={styles.instructionsText}>
+              1. Attach the sensor to your lead wrist{'\n'}
+              2. Assume your ideal impact position:{'\n'}
+              {'   '}• Slightly flexed lead wrist (your target){'\n'}
+              {'   '}• Hands ahead of the ball{'\n'}
+              {'   '}• Proper shaft lean{'\n'}
+              3. Hold completely still for 2 seconds{'\n'}
+              4. This position will be your impact reference
+            </Text>
+          )}
           <View style={styles.noteBox}>
             <Text style={styles.noteText}>
               💡 This is YOUR ideal position – not necessarily 0°. The app will measure 
@@ -292,7 +378,7 @@ export function CalibrationScreen(): React.JSX.Element {
               <Text style={styles.successIcon}>✓</Text>
               <Text style={styles.stateTitle}>Calibration Complete!</Text>
               <Text style={styles.stateSubtitle}>
-                Your impact neutral baseline has been saved
+                Your {calibrationStep === 'address' ? 'address' : 'impact'} reference has been saved
               </Text>
             </View>
           )}
@@ -315,24 +401,38 @@ export function CalibrationScreen(): React.JSX.Element {
               disabled={!isConnected}
             >
               <Text style={styles.calibrateButtonText}>
-                {existingBaseline ? 'Recalibrate' : 'Start Calibration'}
+                {calibrationStep === 'address' 
+                  ? (existingAddress ? 'Recalibrate Address' : 'Start Address Calibration')
+                  : (existingImpact ? 'Recalibrate Impact' : 'Start Impact Calibration')
+                }
               </Text>
             </TouchableOpacity>
           )}
           
           {calibrationState === 'complete' && (
             <>
-              <TouchableOpacity
-                style={styles.doneButton}
-                onPress={() => navigation.goBack()}
-              >
-                <Text style={styles.doneButtonText}>Done</Text>
-              </TouchableOpacity>
+              {calibrationStep === 'address' ? (
+                <TouchableOpacity
+                  style={styles.doneButton}
+                  onPress={moveToNextStep}
+                >
+                  <Text style={styles.doneButtonText}>Continue to Impact</Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={styles.doneButton}
+                  onPress={() => navigation.goBack()}
+                >
+                  <Text style={styles.doneButtonText}>Done</Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity
                 style={styles.recalibrateButton}
                 onPress={resetCalibration}
               >
-                <Text style={styles.recalibrateButtonText}>Calibrate Again</Text>
+                <Text style={styles.recalibrateButtonText}>
+                  {calibrationStep === 'address' ? 'Recalibrate Address' : 'Recalibrate Impact'}
+                </Text>
               </TouchableOpacity>
             </>
           )}
@@ -348,37 +448,47 @@ export function CalibrationScreen(): React.JSX.Element {
         </View>
         
         {/* Existing Calibration Info */}
-        {existingBaseline && calibrationState === 'idle' && (
+        {(existingAddress || existingImpact) && calibrationState === 'idle' && (
           <View style={styles.existingSection}>
             <Text style={styles.sectionTitle}>Current Calibration</Text>
-            <MetricRow
-              label="Calibrated"
-              value={formatDate(existingBaseline.calibratedAt)}
-            />
-            {existingBaseline.euler && (
+            {existingAddress && (
               <>
+                <Text style={styles.subsectionTitle}>Address Reference</Text>
                 <MetricRow
-                  label="Baseline Roll (Flexion)"
-                  value={existingBaseline.euler.roll.toFixed(1)}
-                  unit="°"
+                  label="Calibrated"
+                  value={formatDate(existingAddress.calibratedAt)}
                 />
-                <MetricRow
-                  label="Baseline Pitch"
-                  value={existingBaseline.euler.pitch.toFixed(1)}
-                  unit="°"
-                />
+                {existingAddress.euler && (
+                  <MetricRow
+                    label="Address Roll"
+                    value={existingAddress.euler.roll.toFixed(1)}
+                    unit="°"
+                  />
+                )}
               </>
             )}
-            <MetricRow
-              label="Device"
-              value={existingBaseline.isSimulated ? 'Simulated' : existingBaseline.deviceId.slice(0, 12)}
-            />
+            {existingImpact && (
+              <>
+                <Text style={styles.subsectionTitle}>Impact Reference</Text>
+                <MetricRow
+                  label="Calibrated"
+                  value={formatDate(existingImpact.calibratedAt)}
+                />
+                {existingImpact.euler && (
+                  <MetricRow
+                    label="Impact Roll"
+                    value={existingImpact.euler.roll.toFixed(1)}
+                    unit="°"
+                  />
+                )}
+              </>
+            )}
             
             <TouchableOpacity
               style={styles.clearButton}
               onPress={handleClearCalibration}
             >
-              <Text style={styles.clearButtonText}>Clear Calibration</Text>
+              <Text style={styles.clearButtonText}>Clear All Calibration</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -393,6 +503,12 @@ export function CalibrationScreen(): React.JSX.Element {
           </Text>
         </View>
       </ScrollView>
+
+      {/* Placement Guide Modal */}
+      <PlacementGuideModal
+        visible={showPlacementGuide}
+        onClose={() => setShowPlacementGuide(false)}
+      />
     </SafeAreaView>
   );
 }
@@ -432,11 +548,29 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#1e1e2d',
   },
+  instructionsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
   instructionsTitle: {
     fontSize: 16,
     fontWeight: '600',
     color: '#ffffff',
-    marginBottom: 12,
+  },
+  helpButton: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#3b82f6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  helpButtonText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#ffffff',
   },
   instructionsText: {
     fontSize: 14,
@@ -466,6 +600,60 @@ const styles = StyleSheet.create({
     color: '#9ca3af',
     marginBottom: 12,
     alignSelf: 'flex-start',
+  },
+  stepIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#1e1e2d',
+  },
+  step: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#1e1e2d',
+  },
+  stepActive: {
+    backgroundColor: '#3b82f6',
+  },
+  stepText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#9ca3af',
+  },
+  stepTextActive: {
+    color: '#ffffff',
+  },
+  stepCheck: {
+    marginLeft: 8,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#22c55e',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepCheckText: {
+    fontSize: 12,
+    color: '#ffffff',
+    fontWeight: 'bold',
+  },
+  stepConnector: {
+    width: 30,
+    height: 2,
+    backgroundColor: '#1e1e2d',
+    marginHorizontal: 8,
+  },
+  subsectionTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#ffffff',
+    marginTop: 12,
+    marginBottom: 8,
   },
   stateSection: {
     padding: 24,

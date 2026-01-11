@@ -9,6 +9,7 @@ import React from 'react';
 import { View, Text, StyleSheet, Dimensions } from 'react-native';
 import Svg, { Path, Circle, G, Text as SvgText, Line } from 'react-native-svg';
 import { clamp, mapRange } from '../utils/math';
+import { getWristErrorRating, WristErrorRating } from '../types/calibration';
 
 interface WristAngleGaugeProps {
   /** Current angle in degrees (-90 to 90 typical range) */
@@ -23,6 +24,10 @@ interface WristAngleGaugeProps {
   targetZone?: { min: number; max: number };
   /** Size of the gauge */
   size?: number;
+  /** Current wrist error vs baseline (degrees) - used for threshold color coding */
+  wristError?: number | null;
+  /** Enable threshold-based color coding (Great/OK/Off) */
+  showThresholds?: boolean;
 }
 
 export function WristAngleGauge({
@@ -32,6 +37,8 @@ export function WristAngleGauge({
   maxAngle = 60,
   targetZone,
   size = 200,
+  wristError,
+  showThresholds = false,
 }: WristAngleGaugeProps): React.JSX.Element {
   const centerX = size / 2;
   const centerY = size * 0.7;
@@ -104,8 +111,22 @@ export function WristAngleGauge({
     });
   }
   
-  // Determine color based on position
-  const getColor = () => {
+  // Determine color based on thresholds or position
+  const getColor = (): string => {
+    // Priority: threshold-based color coding if enabled
+    if (showThresholds && wristError !== null && wristError !== undefined) {
+      const rating = getWristErrorRating(wristError);
+      switch (rating) {
+        case 'Great':
+          return '#22c55e'; // Green
+        case 'OK':
+          return '#f59e0b'; // Amber
+        case 'Off':
+          return '#ef4444'; // Red
+      }
+    }
+    
+    // Fallback to target zone color coding
     if (targetZone) {
       if (normalizedAngle >= targetZone.min && normalizedAngle <= targetZone.max) {
         return '#22c55e'; // Green - in zone
@@ -122,6 +143,26 @@ export function WristAngleGauge({
   };
   
   const needleColor = getColor();
+  const rating: WristErrorRating | null = showThresholds && wristError !== null && wristError !== undefined
+    ? getWristErrorRating(wristError)
+    : null;
+  
+  // Get arc background color based on rating
+  const getArcColor = (): string => {
+    if (showThresholds && rating) {
+      switch (rating) {
+        case 'Great':
+          return '#22c55e40'; // Green with opacity
+        case 'OK':
+          return '#f59e0b40'; // Amber with opacity
+        case 'Off':
+          return '#ef444440'; // Red with opacity
+      }
+    }
+    return '#2d3748'; // Default dark gray
+  };
+  
+  const arcColor = getArcColor();
   
   return (
     <View style={styles.container}>
@@ -129,7 +170,7 @@ export function WristAngleGauge({
         {/* Background arc */}
         <Path
           d={arcPath}
-          stroke="#2d3748"
+          stroke={arcColor}
           strokeWidth={strokeWidth}
           fill="none"
           strokeLinecap="round"
@@ -202,9 +243,29 @@ export function WristAngleGauge({
           {angle.toFixed(1)}°
         </Text>
         <Text style={styles.label}>{label}</Text>
+        {/* Rating badge */}
+        {showThresholds && rating && (
+          <View style={[styles.ratingBadge, { backgroundColor: getRatingBgColor(rating) }]}>
+            <Text style={[styles.ratingText, { color: needleColor }]}>
+              {rating}
+            </Text>
+          </View>
+        )}
       </View>
     </View>
   );
+}
+
+// Helper function to get rating background color
+function getRatingBgColor(rating: WristErrorRating): string {
+  switch (rating) {
+    case 'Great':
+      return '#22c55e20';
+    case 'OK':
+      return '#f59e0b20';
+    case 'Off':
+      return '#ef444420';
+  }
 }
 
 const styles = StyleSheet.create({
@@ -223,5 +284,15 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#9ca3af',
     marginTop: 4,
+  },
+  ratingBadge: {
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  ratingText: {
+    fontSize: 12,
+    fontWeight: '600',
   },
 });

@@ -21,6 +21,7 @@ import { useSensor } from '../context';
 import { BLEManager } from '../ble/BLEManager';
 import { DeviceListItem } from '../components/DeviceListItem';
 import { StatusChip } from '../components/StatusChip';
+import { PlacementGuideModal } from '../components/PlacementGuideModal';
 import { DiscoveredDevice } from '../types/ble';
 
 export function ConnectScreen(): React.JSX.Element {
@@ -34,6 +35,7 @@ export function ConnectScreen(): React.JSX.Element {
   } = useSensor();
   
   const [isConnecting, setIsConnecting] = useState<string | null>(null);
+  const [showPlacementGuide, setShowPlacementGuide] = useState(false);
   
   // Start BLE scan
   const handleStartScan = useCallback(async () => {
@@ -211,6 +213,28 @@ export function ConnectScreen(): React.JSX.Element {
         </View>
       )}
       
+      {/* Placement Guide Section */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Placement Guide</Text>
+          <TouchableOpacity
+            onPress={() => setShowPlacementGuide(true)}
+            style={styles.helpButton}
+          >
+            <Text style={styles.helpButtonText}>?</Text>
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.placementGuideText}>
+          Learn how to properly attach the sensor to your lead wrist/forearm for accurate readings.
+        </Text>
+        <TouchableOpacity
+          style={styles.placementGuideButton}
+          onPress={() => setShowPlacementGuide(true)}
+        >
+          <Text style={styles.placementGuideButtonText}>View Placement Guide</Text>
+        </TouchableOpacity>
+      </View>
+
       {/* Calibration Section */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Impact Neutral Calibration</Text>
@@ -252,6 +276,12 @@ export function ConnectScreen(): React.JSX.Element {
           TODO: WT9011DCL BLE UUIDs + packet parsing will be added when device arrives.
         </Text>
       </View>
+
+      {/* Placement Guide Modal */}
+      <PlacementGuideModal
+        visible={showPlacementGuide}
+        onClose={() => setShowPlacementGuide(false)}
+      />
     </SafeAreaView>
   );
 }
@@ -281,11 +311,46 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#1e1e2d',
   },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
   sectionTitle: {
     fontSize: 18,
     fontWeight: '600',
     color: '#ffffff',
+  },
+  helpButton: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#3b82f6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  helpButtonText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#ffffff',
+  },
+  placementGuideText: {
+    fontSize: 14,
+    color: '#9ca3af',
     marginBottom: 12,
+    lineHeight: 20,
+  },
+  placementGuideButton: {
+    backgroundColor: '#1e1e2d',
+    borderRadius: 8,
+    padding: 12,
+    alignItems: 'center',
+  },
+  placementGuideButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#3b82f6',
   },
   toggleRow: {
     flexDirection: 'row',

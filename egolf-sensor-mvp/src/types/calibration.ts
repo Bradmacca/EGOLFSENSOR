@@ -119,3 +119,37 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   feedbackVolume: 0.8,
   hapticEnabled: true,
 };
+
+/**
+ * Calibration Points
+ * Stores address and impact reference points for extended calibration
+ */
+export interface CalibrationPoints {
+  /** Address position (neutral position before swing) */
+  address?: ImpactNeutralBaseline;
+  
+  /** Impact reference (ideal impact position - existing impact neutral) */
+  impact?: ImpactNeutralBaseline;
+  
+  /** Legacy: Impact neutral baseline (kept for backward compatibility) */
+  neutral?: ImpactNeutralBaseline;
+}
+
+/**
+ * Flip Detection Status
+ */
+export type FlipStatus = 'Flipped' | 'Not Flipped' | 'Unknown';
+
+/**
+ * Flip Detection Result
+ */
+export interface FlipDetectionResult {
+  /** Flip status */
+  status: FlipStatus;
+  
+  /** Wrist angle delta (degrees) - positive = flipped */
+  angleDelta?: number;
+  
+  /** Timestamp of detection */
+  detectedAt?: number;
+}

@@ -4,7 +4,7 @@
  * Real-time visualization of sensor data with wrist angle gauge and metrics.
  */
 
-import React, { useCallback } from 'react';
+import React, { useCallback, useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -17,7 +17,10 @@ import { useSensor } from '../context';
 import { WristAngleGauge } from '../components/WristAngleGauge';
 import { MetricRow, MetricGrid } from '../components/MetricRow';
 import { StatusChip } from '../components/StatusChip';
-import { getWristErrorRating } from '../types/calibration';
+import { PlacementGuideModal } from '../components/PlacementGuideModal';
+import { FlipDetector } from '../components/FlipDetector';
+import { getWristErrorRating, FlipStatus } from '../types/calibration';
+import { FlipDetector as FlipDetectorUtil } from '../utils/FlipDetector';
 
 export function LiveScreen(): React.JSX.Element {
   const {
@@ -35,6 +38,39 @@ export function LiveScreen(): React.JSX.Element {
     impactNeutralBaseline,
     currentWristError,
   } = useSensor();
+  
+  const [showPlacementGuide, setShowPlacementGuide] = useState(false);
+  const [flipStatus, setFlipStatus] = useState<FlipStatus>('Unknown');
+  const [flipAngleDelta, setFlipAngleDelta] = useState<number | undefined>(undefined);
+  const flipDetectorRef = useRef<FlipDetectorUtil>(new FlipDetectorUtil({
+    sampleRateHz: sampleRateEstimate || 100,
+  }));
+  
+  // Update flip detector sample rate
+  useEffect(() => {
+    if (sampleRateEstimate > 0) {
+      flipDetectorRef.current.updateConfig({ sampleRateHz: sampleRateEstimate });
+    }
+  }, [sampleRateEstimate]);
+  
+  // Add samples to flip detector when streaming
+  useEffect(() => {
+    if (isStreaming && currentSample) {
+      flipDetectorRef.current.addSample(currentSample);
+    } else if (!isStreaming) {
+      // Clear buffer when not streaming
+      flipDetectorRef.current.clear();
+      setFlipStatus('Unknown');
+      setFlipAngleDelta(undefined);
+    }
+  }, [isStreaming, currentSample]);
+  
+  // Handle manual impact trigger
+  const handleTapImpact = useCallback(() => {
+    const result = flipDetectorRef.current.detectFlip();
+    setFlipStatus(result.status);
+    setFlipAngleDelta(result.angleDelta);
+  }, []);
   
   // Toggle streaming
   const handleToggleStreaming = useCallback(async () => {
@@ -63,7 +99,15 @@ export function LiveScreen(): React.JSX.Element {
       <ScrollView contentContainerStyle={styles.scrollContent}>
         {/* Header */}
         <View style={styles.header}>
-          <Text style={styles.title}>Live View</Text>
+          <View style={styles.headerTop}>
+            <Text style={styles.title}>Live View</Text>
+            <TouchableOpacity
+              onPress={() => setShowPlacementGuide(true)}
+              style={styles.helpButton}
+            >
+              <Text style={styles.helpButtonText}>?</Text>
+            </TouchableOpacity>
+          </View>
           <View style={styles.statusRow}>
             <StatusChip
               label={connectionStatus}
@@ -142,7 +186,9 @@ export function LiveScreen(): React.JSX.Element {
             label="Wrist Angle (Roll)"
             minAngle={-60}
             maxAngle={60}
-            targetZone={{ min: -10, max: 10 }}
+            targetZone={impactNeutralBaseline ? undefined : { min: -10, max: 10 }}
+            wristError={currentWristError}
+            showThresholds={!!impactNeutralBaseline}
           />
         </View>
         
@@ -154,6 +200,24 @@ export function LiveScreen(): React.JSX.Element {
           <MetricRow label="Yaw" value={yaw} unit="°" />
         </View>
         
+        {/* Flip Detector */}
+        {isStreaming && (
+          <View style={styles.metricsSection}>
+            <Text style={styles.metricsTitle}>Flip Detection</Text>
+            <FlipDetector
+              status={flipStatus}
+              angleDelta={flipAngleDelta}
+              showDetails={true}
+            />
+            <TouchableOpacity
+              style={styles.tapImpactButton}
+              onPress={handleTapImpact}
+            >
+              <Text style={styles.tapImpactButtonText}>Tap Impact</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Wrist Error (if calibrated) */}
         {impactNeutralBaseline && (
           <View style={styles.metricsSection}>
@@ -250,6 +314,12 @@ export function LiveScreen(): React.JSX.Element {
           </View>
         )}
       </ScrollView>
+
+      {/* Placement Guide Modal */}
+      <PlacementGuideModal
+        visible={showPlacementGuide}
+        onClose={() => setShowPlacementGuide(false)}
+      />
     </SafeAreaView>
   );
 }
@@ -286,11 +356,29 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#1e1e2d',
   },
+  headerTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
   title: {
     fontSize: 28,
     fontWeight: 'bold',
     color: '#ffffff',
-    marginBottom: 12,
+  },
+  helpButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#3b82f6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  helpButtonText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#ffffff',
   },
   statusRow: {
     flexDirection: 'row',
@@ -410,5 +498,17 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     textAlign: 'center',
     padding: 16,
+  },
+  tapImpactButton: {
+    backgroundColor: '#3b82f6',
+    borderRadius: 8,
+    padding: 12,
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  tapImpactButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#ffffff',
   },
 });
